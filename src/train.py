@@ -69,10 +69,13 @@ def main():
         list(model.classification1.parameters()) + \
         list(model.classification2.parameters()) + \
         list(model.classification3.parameters())
+
+    # TODO: change to mapn parameters
     apn_parameters = \
         list(model.apn1.parameters()) + \
         list(model.apn2.parameters())
 
+    # TODO: switch to Adam
     classification_optim = optim.SGD(classification_parameters, lr=0.001, momentum=0.9)
     apn_optim = optim.SGD(apn_parameters, lr=0.001, momentum=0.9)
 

@@ -10,60 +10,55 @@ from torch.autograd import Variable
 class RACNN(nn.Module):
     def __init__(self, num_classes):
         super(RACNN, self).__init__()
-        # TODO: customize backbone
-        self.convolution1 = models.efficientnet.efficientnet_v2_s(num_classes=num_classes)
-        self.convolution2 = models.efficientnet.efficientnet_v2_s(num_classes=num_classes)
-        self.convolution3 = models.efficientnet.efficientnet_v2_s(num_classes=num_classes)
+        
+        self.convolution1 = models.efficientnet.efficientnet_v2_s(num_classes=num_classes).features
+        self.convolution2 = models.efficientnet.efficientnet_v2_s(num_classes=num_classes).features
+        self.convolution3 = models.efficientnet.efficientnet_v2_s(num_classes=num_classes).features
 
-        self.feature_pool1 = nn.AdaptiveAvgPool2d(output_size=1)
-        self.feature_pool2 = nn.AdaptiveAvgPool2d(output_size=1)
+        self.classification1 = nn.Sequential(nn.Linear(256, num_classes), nn.Softmax(dim=1))
+        self.classification2 = nn.Sequential(nn.Linear(256, num_classes), nn.Softmax(dim=1))
+        self.classification3 = nn.Sequential(nn.Linear(256, num_classes), nn.Softmax(dim=1))
 
-        self.classification1 = nn.Linear(256, num_classes)
-        self.classification2 = nn.Linear(256, num_classes)
-        self.classification3 = nn.Linear(256, num_classes)
-
-        self.attention_pool = nn.MaxPool2d(kernel_size=2, stride=2)
-
-        self.apn1 = nn.Sequential(
+        self.mapn = nn.Sequential(
             nn.Linear(256 * 14 * 14, 1024),
             nn.Tanh(),
-            nn.Linear(1024, 3),
-            nn.Sigmoid()
-        )
-        self.apn2 = nn.Sequential(
-            nn.Linear(256 * 7 * 7, 1024),
-            nn.Tanh(),
-            nn.Linear(1024, 3),
+            nn.Linear(1024, 6),
             nn.Sigmoid()
         )
 
         self.crop_resize = AttentionCropLayer()
-
         self.echo = None
     
     def forward(self, x):
         rescale_tl = torch.tensor([1, 1, 0.5], requires_grad=False).cuda()
 
-        feature_s1 = self.convolution1.features[:-1](x)
-        pool_s1 = self.feature_pool1(feature_s1)
-        attention_s1 = self.apn1(feature_s1.view(-1, 256 * 14 * 14))*rescale_tl
-        resized_s1 = self.crop_resize(x, attention_s1 * x.shape[-1])
+        feature1 = self.convolution1(x)
+        attentions = self.mapn(feature1)
+        cropped2 = self.crop_resize(x, attentions[:3] * rescale_tl * x.shape[-1])  # TODO: rescaling of attentions
+        cropped3 = self.crop_resize(x, attentions[3:] * rescale_tl * x.shape[-1])
+
+        feature2 = self.convolution2(cropped2)
+        feature3 = self.convolution3(cropped3)
+
+        # pool_s1 = self.feature_pool1(feature_s1)
+        # attention_s1 = self.apn1(feature_s1.view(-1, 256 * 14 * 14))*rescale_tl
+        # resized_s1 = self.crop_resize(x, attention_s1 * x.shape[-1])
 
         # forward @scale-2
-        feature_s2 = self.convolution2.features[:-1](resized_s1)
-        pool_s2 = self.feature_pool2(feature_s2)
-        attention_s2 = self.apn2(feature_s2.view(-1, 256 * 7 * 7))*rescale_tl
-        resized_s2 = self.crop_resize(resized_s1, attention_s2 * resized_s1.shape[-1])
+        # feature_s2 = self.convolution2.features[:-1](resized_s1)
+        # pool_s2 = self.feature_pool2(feature_s2)
+        # attention_s2 = self.apn2(feature_s2.view(-1, 256 * 7 * 7))*rescale_tl
+        # resized_s2 = self.crop_resize(resized_s1, attention_s2 * resized_s1.shape[-1])
 
         # forward @scale-3
-        feature_s3 = self.convolution3.features[:-1](resized_s2)
-        pool_s3 = self.feature_pool2(feature_s3)
+        # feature_s3 = self.convolution3.features[:-1](resized_s2)
+        # pool_s3 = self.feature_pool2(feature_s3)
 
-        pred1 = self.classification1(pool_s1.view(-1, 256))
-        pred2 = self.classification2(pool_s2.view(-1, 256))
-        pred3 = self.classification3(pool_s3.view(-1, 256))
+        scores1 = self.classification1(feature1.view(-1, 256))  # TODO: modification of input shape
+        scores2 = self.classification2(feature2.view(-1, 256))
+        scores3 = self.classification3(feature3.view(-1, 256))
 
-        return [pred1, pred2, pred3], [feature_s1, feature_s2], [attention_s1, attention_s2], [resized_s1, resized_s2]
+        return [scores1, scores2, scores3], [cropped2, cropped3]
 
     def echo_pretrain_apn(self, inputs, optimizer):
         inputs = Variable(inputs).cuda()
