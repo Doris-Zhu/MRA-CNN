@@ -43,10 +43,6 @@ def pretrain_apn():
     optimizer = optim.SGD(params, lr=0.001, momentum=0.9)
 
     # load CUB data
-    # TODO: 加载测试集数据，最好是shuffle，batch=4，拿到第一个batch作为sample存起来
-    # TODO: 1. 用CUB200_loader加载data
-    # TODO: 2. 用DataLoader来处理data
-    # TODO: 3. 由于DataLoader没办法直接读取数据，需要先转化为iterator之后用next()读取第一个batch
     log.log('Loading CUB data')
     train_data = CUB200_loader(args.data_path, split='train')
     train_loader = DataLoader(
@@ -68,12 +64,10 @@ def pretrain_apn():
             avg_loss = sum(loss_sum[-5 if len(loss_sum) > 5 else -len(loss_sum):]) / len(loss_sum[-5 if len(loss_sum) > 5 else -len(loss_sum):])
             log.log(f'loss @ step [{step:4d}]: {loss}')
 
-            # TODO: 每一个step，对于每一张sample，生成一个图片
             sample_idx = 0
             for sample in load:
                 _, _, _, resized = net(sample.unsqueeze(0).cuda())
                 x1, x2 = resized[0].data, resized[1].data
-            # TODO: 把图片存在一个文件夹，用固定的命名格式来保证图片的顺序正确
                 save_img(x1, path=f'build/img/step_{step}_sample_{sample_idx}@2x.jpg', annotation=f'loss = {avg_loss:.7f}, step = {step}')
                 save_img(x2, path=f'build/img/step_{step}_sample_{sample_idx}@4x.jpg', annotation=f'loss = {avg_loss:.7f}, step = {step}')
                 sample_idx += 1
@@ -84,7 +78,6 @@ def pretrain_apn():
 
         if epoch % args.checkpoint == args.checkpoint - 1:
             torch.save(net.state_dict(), f'build/apn-{int(time.time())}.pt')
-            # TODO: 在退出的时候保存为.gif/.mp4等动态格式
             for i in range(4):
                 build_gif(pattern='@2x', sample=i, gif_name='pretrain_apn_cub200')
                 build_gif(pattern='@4x', sample=i, gif_name='pretrain_apn_cub200')

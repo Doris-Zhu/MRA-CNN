@@ -1,3 +1,4 @@
+from tkinter import Y
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -15,9 +16,9 @@ class RACNN(nn.Module):
         self.convolution2 = models.efficientnet.efficientnet_v2_s(num_classes=num_classes).features
         self.convolution3 = models.efficientnet.efficientnet_v2_s(num_classes=num_classes).features
 
-        self.classification1 = nn.Sequential(nn.Linear(256, num_classes), nn.Softmax(dim=1))
-        self.classification2 = nn.Sequential(nn.Linear(256, num_classes), nn.Softmax(dim=1))
-        self.classification3 = nn.Sequential(nn.Linear(256, num_classes), nn.Softmax(dim=1))
+        self.fc1 = nn.Linear(256, num_classes)
+        self.fc2 = nn.Linear(256, num_classes)
+        self.fc3 = nn.Linear(256, num_classes)  # TODO: adjust parameters
 
         self.mapn = nn.Sequential(
             nn.Linear(256 * 14 * 14, 1024),
@@ -40,25 +41,11 @@ class RACNN(nn.Module):
         feature2 = self.convolution2(cropped2)
         feature3 = self.convolution3(cropped3)
 
-        # pool_s1 = self.feature_pool1(feature_s1)
-        # attention_s1 = self.apn1(feature_s1.view(-1, 256 * 14 * 14))*rescale_tl
-        # resized_s1 = self.crop_resize(x, attention_s1 * x.shape[-1])
+        scores1 = self.fc1(feature1.view(-1, 256))  # TODO: modification of input shape
+        scores2 = self.fc2(feature2.view(-1, 256))
+        scores3 = self.fc3(feature3.view(-1, 256))
 
-        # forward @scale-2
-        # feature_s2 = self.convolution2.features[:-1](resized_s1)
-        # pool_s2 = self.feature_pool2(feature_s2)
-        # attention_s2 = self.apn2(feature_s2.view(-1, 256 * 7 * 7))*rescale_tl
-        # resized_s2 = self.crop_resize(resized_s1, attention_s2 * resized_s1.shape[-1])
-
-        # forward @scale-3
-        # feature_s3 = self.convolution3.features[:-1](resized_s2)
-        # pool_s3 = self.feature_pool2(feature_s3)
-
-        scores1 = self.classification1(feature1.view(-1, 256))  # TODO: modification of input shape
-        scores2 = self.classification2(feature2.view(-1, 256))
-        scores3 = self.classification3(feature3.view(-1, 256))
-
-        return [scores1, scores2, scores3], [cropped2, cropped3]
+        return [scores1, scores2, scores3], [], attentions, [cropped2, cropped3]
 
     def echo_pretrain_apn(self, inputs, optimizer):
         inputs = Variable(inputs).cuda()
@@ -76,16 +63,16 @@ class RACNN(nn.Module):
         inputs, targets = Variable(inputs).cuda(), Variable(targets).cuda()
         logits, _, _, _ = self.forward(inputs)
         optimizer.zero_grad()
-        loss = self.multitask_loss(logits, targets)
+        loss = self.classification_loss(logits, targets)
         loss.backward()
         optimizer.step()
         return loss.item()
 
-    def echo_apn(self, inputs, targets, optimizer):
+    def echo_mapn(self, inputs, targets, optimizer):
         inputs, targets = Variable(inputs).cuda(), Variable(targets).cuda()
-        logits, _, _, _ = self.forward(inputs)
+        logits, _, attentions, _ = self.forward(inputs)
         optimizer.zero_grad()
-        loss = self.rank_loss(logits, targets)
+        loss = self.rank_loss(logits, targets, attentions)
         loss.backward()
         optimizer.step()
         return loss.item()
@@ -99,11 +86,11 @@ class RACNN(nn.Module):
             self.echo = self.echo_backbone
             self.train()
         if mode_type == 'apn':
-            self.echo = self.echo_apn
+            self.echo = self.echo_mapn
             self.eval()
 
     @staticmethod
-    def multitask_loss(logits, targets):
+    def classification_loss(logits, targets):
         loss = []
         for i in range(len(logits)):
             loss.append(F.cross_entropy(logits[i], targets))
@@ -111,13 +98,21 @@ class RACNN(nn.Module):
         return loss
 
     @staticmethod
-    def rank_loss(logits, targets, margin=0.05):
+    def rank_loss(logits, targets, attentions, margin=0.05):
+        x1, y1, l1, x2, y2, l2 = attentions
+        tl1, br1, tl2, br2 = [x1 - l1, y1 - l1], [x1 + l1, y1 + l1], [x2 - l2, y2 - l2], [x2 + l2, y2 + l2]
+        x_dist = (min(br1[0], br2[0]) - max(tl1[0], tl2[0]))
+        y_dist = (min(br1[1], br2[1]) - max(tl1[1], tl2[1]))
+        if x_dist > 0 and y_dist > 0:
+            loss = x_dist * y_dist
+        else:
+            loss = 0
+
         preds = [F.softmax(x, dim=-1) for x in logits]
         set_pt = [[scaled_pred[batch_inner_id][target] for scaled_pred in preds] for batch_inner_id, target in enumerate(targets)]
-        loss = 0
         for batch_inner_id, pts in enumerate(set_pt):
             loss += (pts[0] - pts[1] + margin).clamp(min=0)
-            loss += (pts[1] - pts[2] + margin).clamp(min=0)
+            loss += (pts[0] - pts[2] + margin).clamp(min=0)
         return loss
 
     @staticmethod

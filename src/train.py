@@ -58,7 +58,7 @@ def test(model, loader):
 def main():
     log.log('Program starts...')
     model = RACNN(num_classes=200).to(device)
-    model.load_state_dict(torch.load(pretrained_apn_path))
+    # model.load_state_dict(torch.load(pretrained_apn_path))
 
     cudnn.benchmark = True
 
@@ -66,18 +66,16 @@ def main():
         list(model.convolution1.parameters()) + \
         list(model.convolution2.parameters()) + \
         list(model.convolution3.parameters()) + \
-        list(model.classification1.parameters()) + \
-        list(model.classification2.parameters()) + \
-        list(model.classification3.parameters())
+        list(model.fc1.parameters()) + \
+        list(model.fc2.parameters()) + \
+        list(model.fc3.parameters())
 
     # TODO: change to mapn parameters
-    apn_parameters = \
-        list(model.apn1.parameters()) + \
-        list(model.apn2.parameters())
+    mapn_parameters = list(model.mapn.parameters())
 
     # TODO: switch to Adam
     classification_optim = optim.SGD(classification_parameters, lr=0.001, momentum=0.9)
-    apn_optim = optim.SGD(apn_parameters, lr=0.001, momentum=0.9)
+    mapn_optim = optim.SGD(mapn_parameters, lr=0.001, momentum=0.9)
 
     log.log('Loading CUB data')
     train_data = CUB200_loader(args.data_path, split='train')
@@ -87,14 +85,14 @@ def main():
 
     for epoch in range(args.epoch):
         classification_loss = train(model, train_loader, classification_optim, epoch, 'backbone')
-        apn_loss = train(model, train_loader, apn_optim, epoch, 'apn')
+        mapn_loss = train(model, train_loader, mapn_optim, epoch, 'mapn')
         test(model, test_loader)
 
         if epoch % args.checkpoint == args.checkpoint - 1:
             stamp = f'e{epoch + 1}{int(time.time())}'
             torch.save(model.state_dict(), os.path.join(args.save_root, f'racnn-effv2-cub200-e{epoch}-s{stamp}.pt'))
             torch.save(classification_optim.state_dict(), os.path.join(args.save_root, f'clsoptim-s{stamp}.pt'))
-            torch.save(apn_optim.state_dict(), os.path.join(args.save_root, f'apnoptim-s{stamp}.pt'))
+            torch.save(mapn_optim.state_dict(), os.path.join(args.save_root, f'mapnoptim-s{stamp}.pt'))
 
     log.log('End of program...')
 
@@ -122,7 +120,7 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '-w',
-        '--pretrain_weight',
+        '--pretrain-weight',
         type=str,
         required=True,
         help='Path of weight'
