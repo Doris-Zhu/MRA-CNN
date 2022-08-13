@@ -122,7 +122,6 @@ if __name__ == '__main__':
         '-w',
         '--pretrain-weight',
         type=str,
-        required=True,
         help='Path of weight'
     )
     parser.add_argument(

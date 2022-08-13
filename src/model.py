@@ -16,12 +16,14 @@ class RACNN(nn.Module):
         self.convolution2 = models.efficientnet.efficientnet_v2_s(num_classes=num_classes).features
         self.convolution3 = models.efficientnet.efficientnet_v2_s(num_classes=num_classes).features
 
+        self.pool = nn.AdaptiveAvgPool2d(output_size=1)
+
         self.fc1 = nn.Linear(256, num_classes)
         self.fc2 = nn.Linear(256, num_classes)
         self.fc3 = nn.Linear(256, num_classes)  # TODO: adjust parameters
 
         self.mapn = nn.Sequential(
-            nn.Linear(256 * 14 * 14, 1024),
+            nn.Linear(256 * 14 * 14, 1024),  # TODO: adjust parameters
             nn.Tanh(),
             nn.Linear(1024, 6),
             nn.Sigmoid()
@@ -33,17 +35,17 @@ class RACNN(nn.Module):
     def forward(self, x):
         rescale_tl = torch.tensor([1, 1, 0.5], requires_grad=False).cuda()
 
-        feature1 = self.convolution1(x)
-        attentions = self.mapn(feature1)
-        cropped2 = self.crop_resize(x, attentions[:3] * rescale_tl * x.shape[-1])  # TODO: rescaling of attentions
-        cropped3 = self.crop_resize(x, attentions[3:] * rescale_tl * x.shape[-1])
+        feature1 = self.convolution1[:-1](x)
+        attentions = self.mapn(feature1.view(-1, 256 * 14 * 14))
+        cropped2 = self.crop_resize(x, attentions[:, :3] * rescale_tl * x.shape[-1])  # TODO: rescaling of attentions
+        cropped3 = self.crop_resize(x, attentions[:, 3:] * rescale_tl * x.shape[-1])
 
-        feature2 = self.convolution2(cropped2)
-        feature3 = self.convolution3(cropped3)
+        feature2 = self.convolution2[:-1](cropped2)
+        feature3 = self.convolution3[:-1](cropped3)
 
-        scores1 = self.fc1(feature1.view(-1, 256))  # TODO: modification of input shape
-        scores2 = self.fc2(feature2.view(-1, 256))
-        scores3 = self.fc3(feature3.view(-1, 256))
+        scores1 = self.fc1(self.pool(feature1).view(-1, 256))  # TODO: modification of input shape
+        scores2 = self.fc2(self.pool(feature2).view(-1, 256))
+        scores3 = self.fc3(self.pool(feature3).view(-1, 256))
 
         return [scores1, scores2, scores3], [], attentions, [cropped2, cropped3]
 
@@ -78,7 +80,6 @@ class RACNN(nn.Module):
         return loss.item()
 
     def mode(self, mode_type):
-        assert mode_type in ['pretrain_apn', 'apn', 'backbone']
         if mode_type == 'pretrain_apn':
             self.echo = self.echo_pretrain_apn
             self.eval()
@@ -99,20 +100,20 @@ class RACNN(nn.Module):
 
     @staticmethod
     def rank_loss(logits, targets, attentions, margin=0.05):
-        x1, y1, l1, x2, y2, l2 = attentions
-        tl1, br1, tl2, br2 = [x1 - l1, y1 - l1], [x1 + l1, y1 + l1], [x2 - l2, y2 - l2], [x2 + l2, y2 + l2]
-        x_dist = (min(br1[0], br2[0]) - max(tl1[0], tl2[0]))
-        y_dist = (min(br1[1], br2[1]) - max(tl1[1], tl2[1]))
-        if x_dist > 0 and y_dist > 0:
-            loss = x_dist * y_dist
-        else:
-            loss = 0
+        loss = 0
 
         preds = [F.softmax(x, dim=-1) for x in logits]
         set_pt = [[scaled_pred[batch_inner_id][target] for scaled_pred in preds] for batch_inner_id, target in enumerate(targets)]
         for batch_inner_id, pts in enumerate(set_pt):
             loss += (pts[0] - pts[1] + margin).clamp(min=0)
             loss += (pts[0] - pts[2] + margin).clamp(min=0)
+
+            x1, y1, l1, x2, y2, l2 = attentions[batch_inner_id]
+            tl1, br1, tl2, br2 = [x1 - l1, y1 - l1], [x1 + l1, y1 + l1], [x2 - l2, y2 - l2], [x2 + l2, y2 + l2]
+            x_dist = (min(br1[0], br2[0]) - max(tl1[0], tl2[0]))
+            y_dist = (min(br1[1], br2[1]) - max(tl1[1], tl2[1]))
+            if x_dist > 0 and y_dist > 0:
+                loss += x_dist * y_dist
         return loss
 
     @staticmethod

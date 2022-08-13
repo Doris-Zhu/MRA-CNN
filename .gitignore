@@ -1,0 +1,6 @@
+external/
+*.sh
+*.txt
+*.out
+*.err
+*.log
