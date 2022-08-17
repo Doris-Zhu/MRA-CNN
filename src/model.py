@@ -12,9 +12,9 @@ class RACNN(nn.Module):
     def __init__(self, num_classes):
         super(RACNN, self).__init__()
         
-        self.convolution1 = models.efficientnet.efficientnet_v2_s(num_classes=num_classes).features
-        self.convolution2 = models.efficientnet.efficientnet_v2_s(num_classes=num_classes).features
-        self.convolution3 = models.efficientnet.efficientnet_v2_s(num_classes=num_classes).features
+        self.convolution1 = models.efficientnet.efficientnet_v2_s(num_classes=num_classes)
+        self.convolution2 = models.efficientnet.efficientnet_v2_s(num_classes=num_classes)
+        self.convolution3 = models.efficientnet.efficientnet_v2_s(num_classes=num_classes)
 
         self.pool = nn.AdaptiveAvgPool2d(output_size=1)
 
@@ -35,33 +35,19 @@ class RACNN(nn.Module):
     def forward(self, x):
         rescale_tl = torch.tensor([1, 1, 0.5], requires_grad=False).cuda()
 
-        feature1 = self.convolution1[:-1](x)
+        feature1 = self.convolution1.features[:-1](x)
         attentions = self.mapn(feature1.view(-1, 256 * 14 * 14))
         cropped2 = self.crop_resize(x, attentions[:, :3] * rescale_tl * x.shape[-1])  # TODO: rescaling of attentions
         cropped3 = self.crop_resize(x, attentions[:, 3:] * rescale_tl * x.shape[-1])
 
-        feature2 = self.convolution2[:-1](cropped2)
-        feature3 = self.convolution3[:-1](cropped3)
+        feature2 = self.convolution2.features[:-1](cropped2)
+        feature3 = self.convolution3.features[:-1](cropped3)
 
         scores1 = self.fc1(self.pool(feature1).view(-1, 256))  # TODO: modification of input shape
         scores2 = self.fc2(self.pool(feature2).view(-1, 256))
         scores3 = self.fc3(self.pool(feature3).view(-1, 256))
 
-        return [scores1, scores2, scores3], [feature1], attentions, [cropped2, cropped3]
-
-    def echo_pretrain_apn(self, inputs, optimizer):
-        inputs = Variable(inputs).cuda()
-        _, features, attens, _ = self.forward(inputs)
-        weak_loc1, weak_loc2 = self.get_weak_loc(features)
-        optimizer.zero_grad()
-        weak_loss1 = F.smooth_l1_loss(attens[0], weak_loc1[0].cuda())
-        weak_loss2 = F.smooth_l1_loss(attens[1], weak_loc1[1].cuda())
-        weak_loss3 = F.smooth_l1_loss(attens[3], weak_loc2[0].cuda())
-        weak_loss4 = F.smooth_l1_loss(attens[4], weak_loc2[1].cuda())
-        loss = weak_loss1 + weak_loss2 + weak_loss3 + weak_loss4
-        loss.backward()
-        optimizer.step()
-        return loss.item()
+        return [scores1, scores2, scores3], feature1, attentions, [cropped2, cropped3]
 
     def echo_backbone(self, inputs, targets, optimizer):
         inputs, targets = Variable(inputs).cuda(), Variable(targets).cuda()
@@ -120,27 +106,36 @@ class RACNN(nn.Module):
 
     @staticmethod
     def get_weak_loc(features):
-        ret1 = []
-        ret2 = []
-        for i in range(len(features)):
-            resize = 224 if i >= 1 else 448
-            response_map_batch = F.interpolate(features[i], size=[resize, resize], mode="bilinear").mean(1)
-            ret_batch1 = []
-            ret_batch2 = []
-            for response_map in response_map_batch:
-                argmax_idx = response_map.argmax()
-                ty = (argmax_idx % resize)
-                argmax_idx = (argmax_idx - ty)/resize
-                tx = (argmax_idx % resize)
-                ret_batch1.append([(tx*1.0/resize).clamp(min=0.25, max=0.75), (ty*1.0/resize).clamp(min=0.25, max=0.75), 0.25])  # tl = 0.25, fixed
-                tl = [(ret_batch1[-1][0] - 0.2) * resize, (ret_batch1[-1][1] - 0.2) * resize]
-                br = [(ret_batch1[-1][0] + 0.2) * resize, (ret_batch1[-1][1] + 0.2) * resize]
-                response_map[int(tl[0]):int(br[0]), int(tl[1]):int(br[1])] = 0
-                argmax_idx2 = response_map.argmax()
-                ty2 = (argmax_idx2 % resize)
-                argmax_idx2 = (argmax_idx - ty2)/resize
-                tx2 = (argmax_idx2 % resize)
-                ret_batch2.append([(tx2*1.0/resize).clamp(min=0.25, max=0.75), (ty2*1.0/resize).clamp(min=0.25, max=0.75), 0.25])
-            ret1.append(torch.Tensor(ret_batch1))
-            ret2.append(torch.Tensor(ret_batch2))
-        return [ret1, ret2]
+        resize = 448
+        response_map_batch = F.interpolate(features, size=[resize, resize], mode="bilinear").mean(1)
+        ret_batch = torch.zeros([len(response_map_batch), 6])
+        for i, response_map in enumerate(response_map_batch):
+            response_map_copy = torch.clone(response_map)
+            argmax_idx = response_map_copy.argmax()
+            ty = (argmax_idx % resize)
+            argmax_idx = (argmax_idx - ty)/resize
+            tx = (argmax_idx % resize)
+            cur_batch = [(tx*1.0/resize).clamp(min=0.25, max=0.75), (ty*1.0/resize).clamp(min=0.25, max=0.75), 0.25]  # tl = 0.25, fixed
+            tl = [(cur_batch[0] - 0.2) * resize, (cur_batch[1] - 0.2) * resize]
+            br = [(cur_batch[0] + 0.2) * resize, (cur_batch[1] + 0.2) * resize]
+            response_map_copy[int(tl[0]):int(br[0]), int(tl[1]):int(br[1])] = 0
+            argmax_idx2 = response_map_copy.argmax()
+            ty2 = (argmax_idx2 % resize)
+            argmax_idx2 = (argmax_idx - ty2)/resize
+            tx2 = (argmax_idx2 % resize)
+            cur_batch.extend([(tx2*1.0/resize).clamp(min=0.25, max=0.75), (ty2*1.0/resize).clamp(min=0.25, max=0.75), 0.25])
+            ret_batch[i] = torch.tensor(cur_batch)
+        return torch.tensor(ret_batch)
+
+    def echo_pretrain_apn(self, inputs, optimizer):
+        inputs = Variable(inputs).cuda()
+        _, features, attens, _ = self.forward(inputs)
+        weak_loc = self.get_weak_loc(features)
+        optimizer.zero_grad()
+        print(attens.shape)
+        print(weak_loc.shape)
+        weak_loss = F.smooth_l1_loss(attens[0], weak_loc[0].cuda())
+        loss = weak_loss
+        loss.backward()
+        optimizer.step()
+        return loss.item()

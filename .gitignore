@@ -1,4 +1,7 @@
 external/
+build/
+log/
+slog/
 *.sh
 *.txt
 *.out

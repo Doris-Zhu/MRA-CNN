@@ -19,6 +19,9 @@ def train(model, loader, optim, epoch, mode):
     losses = []
 
     for step, (inputs, labels) in enumerate(loader):
+        if step > 1000:
+            continue
+        
         loss = model.echo(inputs, labels, optim)
         losses.append(loss)
 
@@ -58,7 +61,7 @@ def test(model, loader):
 def main():
     log.log('Program starts...')
     model = RACNN(num_classes=200).to(device)
-    # model.load_state_dict(torch.load(pretrained_apn_path))
+    model.load_state_dict(torch.load(pretrained_apn_path))
 
     cudnn.benchmark = True
 
