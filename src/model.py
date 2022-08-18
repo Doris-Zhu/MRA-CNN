@@ -36,16 +36,19 @@ class RACNN(nn.Module):
         rescale_tl = torch.tensor([1, 1, 0.5], requires_grad=False).cuda()
 
         feature1 = self.convolution1.features[:-1](x)
-        attentions = self.mapn(feature1.view(-1, 256 * 14 * 14))
+        feature_pool1 = self.pool(feature1)
+	attentions = self.mapn(feature1.view(-1, 256 * 14 * 14))
         cropped2 = self.crop_resize(x, attentions[:, :3] * rescale_tl * x.shape[-1])  # TODO: rescaling of attentions
         cropped3 = self.crop_resize(x, attentions[:, 3:] * rescale_tl * x.shape[-1])
 
         feature2 = self.convolution2.features[:-1](cropped2)
         feature3 = self.convolution3.features[:-1](cropped3)
+	feature_pool2 = self.pool(feature2)
+	feature_pool3 = self.pool(feature3)
 
-        scores1 = self.fc1(self.pool(feature1).view(-1, 256))  # TODO: modification of input shape
-        scores2 = self.fc2(self.pool(feature2).view(-1, 256))
-        scores3 = self.fc3(self.pool(feature3).view(-1, 256))
+        scores1 = self.fc1(feature_pool1.view(-1, 256))  # TODO: modification of input shape
+        scores2 = self.fc2(feature_pool2.view(-1, 256))
+        scores3 = self.fc3(feature_pool3.view(-1, 256))
 
         return [scores1, scores2, scores3], feature1, attentions, [cropped2, cropped3]
 

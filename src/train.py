@@ -19,7 +19,7 @@ def train(model, loader, optim, epoch, mode):
     losses = []
 
     for step, (inputs, labels) in enumerate(loader):
-        if step > 1000:
+        if step > 800:
             continue
         
         loss = model.echo(inputs, labels, optim)
@@ -43,7 +43,10 @@ def test(model, loader):
 
         with torch.no_grad():
             outputs, _, _, _ = model(inputs)
+	    print(outputs.shape)
             for idx, logits in enumerate(outputs):
+		if(idx == 0):
+		    print(logits)
                 stats[f'scale{idx}']['top-1'] += \
                     torch.eq(logits.topk(1, 1, True, True)[1], labels.view(-1, 1)).sum().float().item()
                 stats[f'scale{idx}']['top-5'] += \
@@ -55,6 +58,7 @@ def test(model, loader):
                     for topk in stats[scale].keys():
                         log.log(f'\tAccuracy {scale} @ {topk} [{step}/{len(loader)}] = '
                                 f'{stats[scale][topk]/((step+1)*int(inputs.shape[0])):.5%}')
+                        print('stats', stats[scale][topk])
                 return
 
 
@@ -88,7 +92,7 @@ def main():
 
     for epoch in range(args.epoch):
         classification_loss = train(model, train_loader, classification_optim, epoch, 'backbone')
-        mapn_loss = train(model, train_loader, mapn_optim, epoch, 'mapn')
+        # mapn_loss = train(model, train_loader, mapn_optim, epoch, 'mapn')
         test(model, test_loader)
 
         if epoch % args.checkpoint == args.checkpoint - 1:
