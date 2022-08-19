@@ -59,8 +59,8 @@ def pretrain_backbone():
     log.log('Loading CUB data')
     train_data = CUB200_loader(args.data_path, split='train')
     test_data = CUB200_loader(args.data_path, split='test')
-    train_loader = DataLoader(train_data, batch_size=32, shuffle=True, num_workers=4, collate_fn=train_data.CUB_collate)
-    test_loader = DataLoader(test_data, batch_size=64, shuffle=False, num_workers=4, collate_fn=test_data.CUB_collate)
+    train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True, num_workers=4, collate_fn=train_data.CUB_collate)
+    test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=False, num_workers=4, collate_fn=test_data.CUB_collate)
 
     loss_fn = nn.CrossEntropyLoss()
     optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
@@ -88,7 +88,7 @@ def pretrain_backbone():
                 losses = 0
 
         # test every 10 epochs
-        if epoch % 10 == 9:
+        if epoch % 5 == 4:
             test_model(net, test_loader)
 
         if epoch % args.checkpoint == args.checkpoint - 1:
@@ -109,6 +109,12 @@ if __name__ == "__main__":
         help='Name of the backbone to be used in RA-CNN'
     )
     parser.add_argument(
+        '--batch-size',
+        default=4,
+        type=int,
+        help='Batch size for training'
+    )
+    parser.add_argument(
         '--checkpoint',
         default=20,
         type=int,
@@ -122,7 +128,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         '--epoch',
-        default=80,
+        default=100,
         type=int,
         help='Number of epochs'
     )

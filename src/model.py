@@ -1,4 +1,3 @@
-from tkinter import Y
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -37,14 +36,14 @@ class RACNN(nn.Module):
 
         feature1 = self.convolution1.features[:-1](x)
         feature_pool1 = self.pool(feature1)
-	attentions = self.mapn(feature1.view(-1, 256 * 14 * 14))
+        attentions = self.mapn(feature1.view(-1, 256 * 14 * 14))
         cropped2 = self.crop_resize(x, attentions[:, :3] * rescale_tl * x.shape[-1])  # TODO: rescaling of attentions
         cropped3 = self.crop_resize(x, attentions[:, 3:] * rescale_tl * x.shape[-1])
 
         feature2 = self.convolution2.features[:-1](cropped2)
         feature3 = self.convolution3.features[:-1](cropped3)
-	feature_pool2 = self.pool(feature2)
-	feature_pool3 = self.pool(feature3)
+        feature_pool2 = self.pool(feature2)
+        feature_pool3 = self.pool(feature3)
 
         scores1 = self.fc1(feature_pool1.view(-1, 256))  # TODO: modification of input shape
         scores2 = self.fc2(feature_pool2.view(-1, 256))
@@ -71,13 +70,13 @@ class RACNN(nn.Module):
         return loss.item()
 
     def mode(self, mode_type):
-        if mode_type == 'pretrain_apn':
-            self.echo = self.echo_pretrain_apn
+        if mode_type == 'pretrain_mapn':
+            self.echo = self.echo_pretrain_mapn
             self.eval()
         if mode_type == 'backbone':
             self.echo = self.echo_backbone
             self.train()
-        if mode_type == 'apn':
+        if mode_type == 'mapn':
             self.echo = self.echo_mapn
             self.eval()
 
@@ -130,7 +129,7 @@ class RACNN(nn.Module):
             ret_batch[i] = torch.tensor(cur_batch)
         return torch.tensor(ret_batch)
 
-    def echo_pretrain_apn(self, inputs, optimizer):
+    def echo_pretrain_mapn(self, inputs, optimizer):
         inputs = Variable(inputs).cuda()
         _, features, attens, _ = self.forward(inputs)
         weak_loc = self.get_weak_loc(features)

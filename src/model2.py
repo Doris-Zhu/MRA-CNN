@@ -1,0 +1,148 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torchvision.models as models
+
+from utils.attention_utils import AttentionCropLayer
+from torch.autograd import Variable
+
+
+class RACNN(nn.Module):
+    def __init__(self, num_classes):
+        super(RACNN, self).__init__()
+        # TODO: customize backbone
+        self.convolution1 = models.efficientnet.efficientnet_v2_s(num_classes=num_classes)
+        self.convolution2 = models.efficientnet.efficientnet_v2_s(num_classes=num_classes)
+        self.convolution3 = models.efficientnet.efficientnet_v2_s(num_classes=num_classes)
+
+        self.feature_pool1 = nn.AdaptiveAvgPool2d(output_size=1)
+        self.feature_pool2 = nn.AdaptiveAvgPool2d(output_size=1)
+
+        self.fc1 = nn.Linear(256, num_classes)
+        self.fc2 = nn.Linear(256, num_classes)
+        self.fc3 = nn.Linear(256, num_classes)
+
+        self.attention_pool = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        # self.apn1 = nn.Sequential(
+        #     nn.Linear(256 * 14 * 14, 1024),
+        #     nn.Tanh(),
+        #     nn.Linear(1024, 3),
+        #     nn.Sigmoid()
+        # )
+        # self.apn2 = nn.Sequential(
+        #     nn.Linear(256 * 7 * 7, 1024),
+        #     nn.Tanh(),
+        #     nn.Linear(1024, 3),
+        #     nn.Sigmoid()
+        # )
+        self.mapn = nn.Sequential(
+            nn.Linear(256 * 14 * 14, 1024),  # TODO: adjust parameters
+            nn.Tanh(),
+            nn.Linear(1024, 6),
+            nn.Sigmoid()
+        )
+
+        self.crop_resize = AttentionCropLayer()
+
+        self.echo = None
+    
+    def forward(self, x):
+        rescale_tl = torch.tensor([1, 1, 0.5], requires_grad=False).cuda()
+
+        feature_s1 = self.convolution1.features[:-1](x)
+        pool_s1 = self.feature_pool1(feature_s1)
+        # attention_s1 = self.apn1(feature_s1.view(-1, 256 * 14 * 14))*rescale_tl
+        # resized_s1 = self.crop_resize(x, attention_s1 * x.shape[-1])
+
+        # forward @scale-2
+        feature_s2 = self.convolution2.features[:-1](x)
+        pool_s2 = self.feature_pool2(feature_s2)
+        # attention_s2 = self.apn2(feature_s2.view(-1, 256 * 7 * 7))*rescale_tl
+        # resized_s2 = self.crop_resize(resized_s1, attention_s2 * resized_s1.shape[-1])
+
+        # forward @scale-3
+        feature_s3 = self.convolution3.features[:-1](x)
+        pool_s3 = self.feature_pool2(feature_s3)
+
+        pred1 = self.fc1(pool_s1.view(-1, 256))
+        pred2 = self.fc2(pool_s2.view(-1, 256))
+        pred3 = self.fc3(pool_s3.view(-1, 256))
+
+        return [pred1, pred2, pred3], [feature_s1, feature_s2], [], []
+
+    def echo_pretrain_apn(self, inputs, optimizer):
+        inputs = Variable(inputs).cuda()
+        _, features, attens, _ = self.forward(inputs)
+        weak_loc = self.get_weak_loc(features)
+        optimizer.zero_grad()
+        weak_loss1 = F.smooth_l1_loss(attens[0], weak_loc[0].cuda())
+        weak_loss2 = F.smooth_l1_loss(attens[1], weak_loc[1].cuda())
+        loss = weak_loss1 + weak_loss2
+        loss.backward()
+        optimizer.step()
+        return loss.item()
+
+    def echo_backbone(self, inputs, targets, optimizer):
+        inputs, targets = Variable(inputs).cuda(), Variable(targets).cuda()
+        logits, _, _, _ = self.forward(inputs)
+        optimizer.zero_grad()
+        loss = self.multitask_loss(logits, targets)
+        loss.backward()
+        optimizer.step()
+        return loss.item()
+
+    def echo_apn(self, inputs, targets, optimizer):
+        inputs, targets = Variable(inputs).cuda(), Variable(targets).cuda()
+        logits, _, _, _ = self.forward(inputs)
+        optimizer.zero_grad()
+        loss = self.rank_loss(logits, targets)
+        loss.backward()
+        optimizer.step()
+        return loss.item()
+
+    def mode(self, mode_type):
+        assert mode_type in ['pretrain_apn', 'apn', 'backbone']
+        if mode_type == 'pretrain_apn':
+            self.echo = self.echo_pretrain_apn
+            self.eval()
+        if mode_type == 'backbone':
+            self.echo = self.echo_backbone
+            self.train()
+        if mode_type == 'apn':
+            self.echo = self.echo_apn
+            self.eval()
+
+    @staticmethod
+    def multitask_loss(logits, targets):
+        loss = []
+        for i in range(len(logits)):
+            loss.append(F.cross_entropy(logits[i], targets))
+        loss = torch.sum(torch.stack(loss))
+        return loss
+
+    @staticmethod
+    def rank_loss(logits, targets, margin=0.05):
+        preds = [F.softmax(x, dim=-1) for x in logits]
+        set_pt = [[scaled_pred[batch_inner_id][target] for scaled_pred in preds] for batch_inner_id, target in enumerate(targets)]
+        loss = 0
+        for batch_inner_id, pts in enumerate(set_pt):
+            loss += (pts[0] - pts[1] + margin).clamp(min=0)
+            loss += (pts[1] - pts[2] + margin).clamp(min=0)
+        return loss
+
+    @staticmethod
+    def get_weak_loc(features):
+        ret = []
+        for i in range(len(features)):
+            resize = 224 if i >= 1 else 448
+            response_map_batch = F.interpolate(features[i], size=[resize, resize], mode="bilinear").mean(1)
+            ret_batch = []
+            for response_map in response_map_batch:
+                argmax_idx = response_map.argmax()
+                ty = (argmax_idx % resize)
+                argmax_idx = (argmax_idx - ty)/resize
+                tx = (argmax_idx % resize)
+                ret_batch.append([(tx*1.0/resize).clamp(min=0.25, max=0.75), (ty*1.0/resize).clamp(min=0.25, max=0.75), 0.25])  # tl = 0.25, fixed
+            ret.append(torch.Tensor(ret_batch))
+        return ret
