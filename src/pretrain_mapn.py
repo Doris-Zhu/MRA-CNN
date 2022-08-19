@@ -30,7 +30,7 @@ def build_gif(pattern='@2x', sample=0, gif_name='pretrain_apn_cub200', cache_pat
     imageio.mimsave(f"build/{gif_name}{pattern}_{str(sample)}-{int(time.time())}.gif", gif_images, fps=8)
 
 
-def pretrain_apn():
+def pretrain_mapn():
     net = RACNN(num_classes=200).to(device)
     if args.pretrained_backbone:
         state_dict = torch.load(args.pretrained_backbone).state_dict()
@@ -54,7 +54,7 @@ def pretrain_apn():
     
     load, _ = next(iter(test_loader))
 
-    net.mode("pretrain_apn")
+    net.mode("pretrain_mapn")
 
     for epoch in range(args.epoch):
         loss_sum = []
@@ -143,6 +143,6 @@ if __name__ == "__main__":
         os.makedirs(args.save_path)
 
     # run pretrain
-    pretrain_apn()
+    pretrain_mapn()
 
     # TODO: gif visualization

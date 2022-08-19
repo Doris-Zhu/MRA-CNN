@@ -19,9 +19,6 @@ def train(model, loader, optim, epoch, mode):
     losses = []
 
     for step, (inputs, labels) in enumerate(loader):
-        if step > 800:
-            continue
-        
         loss = model.echo(inputs, labels, optim)
         losses.append(loss)
 
@@ -44,14 +41,13 @@ def test(model, loader):
         with torch.no_grad():
             outputs, _, _, _ = model(inputs)
             for idx, logits in enumerate(outputs):
-                if(idx == 0):
                 stats[f'scale{idx}']['top-1'] += \
                     torch.eq(logits.topk(1, 1, True, True)[1], labels.view(-1, 1)).sum().float().item()
                 stats[f'scale{idx}']['top-5'] += \
                     torch.eq(logits.topk(5, 1, True, True)[1], labels.view(-1, 1)).sum().float().item()
 
             # stop early to save time
-            if step > 200:
+            if step > 100:
                 for scale in stats.keys():
                     for topk in stats[scale].keys():
                         log.log(f'\tAccuracy {scale} @ {topk} [{step}/{len(loader)}] = '
@@ -73,8 +69,7 @@ def main():
         list(model.fc1.parameters()) + \
         list(model.fc2.parameters()) + \
         list(model.fc3.parameters())
-
-    # TODO: change to mapn parameters
+        
     mapn_parameters = list(model.mapn.parameters())
 
     # TODO: switch to Adam
@@ -84,12 +79,12 @@ def main():
     log.log('Loading CUB data')
     train_data = CUB200_loader(args.data_path, split='train')
     test_data = CUB200_loader(args.data_path, split='test')
-    train_loader = DataLoader(train_data, batch_size=4, shuffle=True, num_workers=4, collate_fn=train_data.CUB_collate)
-    test_loader = DataLoader(test_data, batch_size=8, shuffle=False, num_workers=4, collate_fn=test_data.CUB_collate)
+    train_loader = DataLoader(train_data, batch_size=16, shuffle=True, num_workers=4, collate_fn=train_data.CUB_collate)
+    test_loader = DataLoader(test_data, batch_size=16, shuffle=False, num_workers=4, collate_fn=test_data.CUB_collate)
 
     for epoch in range(args.epoch):
         classification_loss = train(model, train_loader, classification_optim, epoch, 'backbone')
-        # mapn_loss = train(model, train_loader, mapn_optim, epoch, 'mapn')
+        mapn_loss = train(model, train_loader, mapn_optim, epoch, 'mapn')
         test(model, test_loader)
 
         if epoch % args.checkpoint == args.checkpoint - 1:
